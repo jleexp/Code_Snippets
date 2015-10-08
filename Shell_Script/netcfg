@@ -1,0 +1,823 @@
+#!/bin/sh
+#
+# NeTcFg for SoFtNeXt FreeBSD BOX configuration.
+# VERSION 1.20091031
+# Louis Lu
+#
+trap 'echo "Control-C disabled." ; sleep 1' 2
+#
+
+echo "Initializing . . ."
+
+homedir="/etc/"
+tmpdir="/var/tmp/"
+smsdir="/home/www/htdocs/snsms/"
+virtusertableexist="IDONTCARE"
+
+rm -f ${tmpdir}hosts.new
+rm -f ${tmpdir}rc.conf.new
+rm -f ${tmpdir}resolv.conf.new
+rm -f ${tmpdir}virtusertable.new
+rm -f ${tmpdir}EEFBridge.ini.new
+
+if [ -r ${smsdir}pw.ini ]; then
+  virtusertableexist="DETECT"
+fi
+
+include() {
+  if [ -r ${homedir}${1} ]; then
+    . ${homedir}${1}
+  fi
+}
+
+include dom.conf
+include rc.conf
+gateway=`netstat -rn | grep default | awk '{print $2}'`
+gatewaynew=$gateway
+hostname="`hostname`"
+hostnamenew=$hostname
+domainname="`cat /etc/resolv.conf | grep domain | awk '{print $2}'`"
+domainnamenew=$domainname
+set `cat /etc/resolv.conf | grep nameserver | awk '{print $2}'`
+i="1"
+for DNS; do
+  eval dns${i}="${DNS}"
+  i="`expr ${i} + 1`"
+done
+dns1new=$dns1
+dns2new=$dns2
+dns3new=$dns3
+
+pressenter() {
+  echo -n "Press ENTER to continue. . ."
+  read temp
+}
+
+hex2decimal() {
+  case ${1} in
+  [Aa])
+    echo 10
+    ;;
+  [Bb])
+    echo 11
+    ;;
+  [Cc])
+    echo 12
+    ;;
+  [Dd])
+    echo 13
+    ;;
+  [Ee])
+    echo 14
+    ;;
+  [Ff])
+    echo 15
+    ;;
+  [0-9])
+    echo $1
+    ;;
+  esac
+}
+
+decimal2hex() {
+  case ${1} in
+  [0-9])
+    echo "${1}"
+    ;;
+  10)
+    echo "A"
+    ;;
+  11)
+    echo "B"
+    ;;
+  12)
+    echo "C"
+    ;;
+  13)
+    echo "D"
+    ;;
+  14)
+    echo "E"
+    ;;
+  15)
+    echo "F"
+    ;;
+  esac
+}
+
+randomdebugcode() {
+  randomseed=`date "+%M%S"`
+  randomseed=`expr ${randomseed} \* 234 % 255`
+  if [ "${modified}" = "TRUE" ]; then
+    if [ "${randomseed}" -le 127 ]; then
+      randomseed=`expr ${randomseed} + 127`
+    fi
+  else
+    if [ "${randomseed}" -gt 127 ]; then
+      randomseed=`expr ${randomseed} - 127`
+    fi
+  fi
+  temp1="`expr ${randomseed} / 16`"
+  temp2="`expr ${randomseed} % 16`"
+  if [ ! "${temp1}" ]; then
+    temp1="0"
+  fi
+  if [ ! "${temp2}" ]; then
+    temp2="0"
+  fi
+  temp1="`decimal2hex ${temp1}`"
+  temp2="`decimal2hex ${temp2}`"
+  echo "                             [${1}]                                 ${temp1}${temp2}"
+}
+
+if_chk() {
+  set `ifconfig -l`
+  network_ifs=""
+  for interface; do
+    if [ "`ifconfig $interface | grep ether`" ]; then
+      network_ifs="${network_ifs} ${interface}"
+    fi
+  done
+  # got physical interfaces in $network_ifs
+  ifnum="0"
+  for network_if in ${network_ifs}; do
+    ifnum="`expr ${ifnum} + 1`";
+    if [ "${network_if}" = "fxp0" ]; then
+      fxpyes="TRUE"
+    fi
+    eval nic${ifnum}="${network_if}"
+    parsedipmask="`ifconfig ${network_if} | grep inet | grep -v inet6 | awk '{printf ("%s ", $2);split($4, aa, "" ) ; for ( i = 3; i <= 10; i++ ) printf ("%s ", aa[i])}'`"
+    i="1"
+    if [ "${parsedipmask}" ]; then
+    for field in $parsedipmask; do
+      case ${i} in
+      1)
+        eval ip${ifnum}=${field}
+        ;;
+      2)
+        temp="`hex2decimal ${field}`"
+        mask1="`expr ${temp} \* 16`"
+        ;;
+      3)
+        temp=`hex2decimal ${field}`
+        mask1=`expr ${mask1} + ${temp}`
+        ;;
+      4)
+        temp=`hex2decimal ${field}`
+        mask2=`expr ${temp} \* 16`
+        ;;
+      5)
+        temp=`hex2decimal ${field}`
+        mask2=`expr ${mask2} + ${temp}`
+        ;;
+      6)
+        temp=`hex2decimal ${field}`
+        mask3=`expr ${temp} \* 16`
+        ;;
+      7)
+        temp=`hex2decimal ${field}`
+        mask3=`expr ${mask3} + ${temp}`
+        ;;
+      8)
+        temp=`hex2decimal ${field}`
+        mask4=`expr ${temp} \* 16`
+        ;;
+      9)
+        temp=`hex2decimal ${field}`
+        mask4=`expr ${mask4} + ${temp}`
+        ;;
+      esac
+        i="`expr ${i} + 1`"
+    done
+    eval netmask${ifnum}="${mask1}.${mask2}.${mask3}.${mask4}"
+    fi
+    temp="`ifconfig ${network_if} | grep status | awk -F 'status: ' '{print $2}'`"
+    eval linkstat${ifnum}="\${temp}"
+  done
+  if [ "${fxpyes}" != "TRUE" ]; then
+  #NIC is not fxp0
+    RSA=`grep -c "ifconfig_fxp0=" /etc/rc.conf`
+    if [ $RSA -ge 1 ]; then
+    # Still using default setting fxp0 192.168.1.250
+      cat /etc/hosts | grep -v "192.168.1.250" > ${tmpdir}hosts.new
+      mv -f ${tmpdir}hosts.new /etc/hosts
+      cat /etc/rc.conf | sed 's/ifconfig_fxp0=/ifconfig_'${nic1}'=/' > ${tmpdir}rc.conf.new
+      mv -f ${tmpdir}rc.conf.new /etc/rc.conf
+    fi
+  fi
+}
+
+if [ "${virtusertableexist}" = "DETECT" ]; then
+  if [ ! -r /etc/mail/virtusertable.db ]; then
+    rm -f /etc/mail/virtusertable
+    virtusertableexist="NO"
+    touch /etc/mail/virtusertable
+  fi
+fi
+
+if_chk
+i="1"
+while [ "${i}" -le "${ifnum}" ]; do
+  eval linkstatnew${i}="\$linkstat${i}"
+  eval ipnew${i}="\$ip${i}"
+  eval netmasknew${i}="\$netmask${i}"
+  if [ "${virtusertableexist}" = "NO" ]; then
+    eval echo "@[\$ip${i}]\	\	5j4vu6z" >> /etc/mail/virtusertable
+  fi
+  i="`expr ${i} + 1`"
+done
+
+if [ "${virtusertableexist}" = "NO" ]; then
+  eval echo "@${hostname}\.${domainname}\	\	5j4vu6z" >> /etc/mail/virtusertable
+  /usr/sbin/makemap hash /etc/mail/virtusertable.db < /etc/mail/virtusertable
+fi
+
+
+ip_chk() {
+  true=`echo "${*}" | sed "s/[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}.[0-9]\{1,3\}/TRUE/"`
+  if [ "${true}" = "TRUE" ]; then
+    echo "${1}"
+  else
+    echo ""
+  fi
+}
+
+hn_chk() {
+  tempi="`echo ${*} | sed s/\[0-9a-zA-Z.-\]//g`"
+  if [ ! "${tempi}" ]; then
+    echo "${1}"
+  else
+    echo ""
+  fi
+}
+
+dn_chk() {
+  tempi="`echo ${*} | sed s/[0-9a-zA-Z.-]//g`"
+  if [ ! "${tempi}" ]; then
+    true=`echo "${1}" | sed "s/.[a-zA-Z0-9.-]*\..[a-zA-Z0-9.-]*/TRUE/"`
+    if [ "${true}" = "TRUE" ]; then
+      echo "${1}"
+    else
+      echo ""
+    fi
+  else
+    echo ""
+  fi
+}
+
+ip_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    eval echo -n "Input new IP of \$nic${1}:\ "
+    read temp
+    if [ ! "${temp}" ]; then
+      eval echo "Not changed."
+      break
+    fi
+    temp="`ip_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid IP address!"
+    else
+      eval ipnew${1}=${temp}
+      modified="TRUE"
+    fi
+  done
+}
+
+netmask_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    eval echo -n "Input new netmask of \$nic${1}:\ "
+    read temp
+    if [ ! "${temp}" ]; then
+      eval echo "Not changed."
+      sleep 1
+      break
+    fi
+    temp="`ip_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid netmask!"
+    else
+      eval netmasknew${1}=${temp}
+      modified="TRUE"
+    fi
+  done
+}
+
+ip_menu() {
+  while : ;do
+    clear
+    randomdebugcode " Network Menu "
+    echo "
+
+        	Network Interface Selection
+
+        NIC	link-state	IP		netmask"
+    i="1"
+    while [ "${i}" -le "${ifnum}" ]; do
+      eval echo "${i}.\	\$nic${i}\	\$linkstat${i}\	\	\$ip${i}\	\$netmask${i}"
+      eval echo "\ \ New setting:\	\$linkstatnew${i}\	\	\$ipnew${i}\	\$netmasknew${i}"
+      echo
+      i="`expr ${i} + 1`"
+    done
+
+    echo -n "
+
+      r. reset all ip/netmask setting
+      x. Main menu
+
+         Your select: "
+    read ifn
+    temp="`echo ${ifn} | sed s/[a-zA-Z0-9]//g`"
+    if [ "${temp}" ]; then
+      ifn="FALSE"
+    fi
+    case ${ifn} in
+    [1-9])
+      if [ "${ifn}" -gt "0" -a "${ifn}" -le "${ifnum}" ]; then
+        ip_ch ${ifn}
+        netmask_ch ${ifn}
+      fi
+      ;;
+    "r")
+      echo -n "reset all IP/netmask setting(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        i="1"
+        while [ "${i}" -le "${ifnum}" ]; do
+          eval ipnew${i}="\$ip${i}"
+          eval netmasknew${i}="\$netmask${i}"
+          i="`expr ${i} + 1`"
+        done
+        ;;
+      esac
+      ;;
+    "x")
+      break
+      ;;
+    esac
+  done
+}
+
+gateway_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    echo -n "Input new gateway: "
+    read temp
+    if [ ! "${temp}" ]; then
+      gatewaynew="${gateway}"
+      echo "Canceled."
+      sleep 1
+      break
+    fi
+    temp="`ip_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid gateway!"
+    else
+      gatewaynew="${temp}"
+      modified="TRUE"
+    fi
+  done
+}
+
+hostname_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    echo -n "Input new hostname: "
+    read temp
+    if [ ! "${temp}" ]; then
+      hostnamenew=$hostname
+      echo "Canceled."
+      sleep 1
+      break
+    fi
+    temp="`hn_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid host name!"
+    else
+      hostnamenew="${temp}"
+      modified="TRUE"
+    fi
+  done
+}
+
+domainname_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    echo -n "Input new domain name: "
+    read temp
+    if [ ! "${temp}" ]; then
+      domainnamenew=$domainname
+      echo "Canceled."
+      sleep 1
+      break
+    fi
+    temp="`dn_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid domain name!"
+    else
+      domainnamenew="${temp}"
+      modified="TRUE"
+    fi
+  done
+}
+
+dns_menu() {
+  dnsn=""
+  while [ "$dnsn" != "x" ]; do
+    clear
+    randomdebugcode "   DNS Menu   "
+    echo -n "
+
+        		CURRENT			NEW
+      1. DNS Server 1	($dns1)		($dns1new)
+      2. DNS Server 2	($dns2)		($dns2new)
+      3. DNS Server 3	($dns3)		($dns3new)
+
+      r. reset all dns setting
+      x. Main menu
+
+         Your select: "
+    read dnsn
+    temp="`echo ${dnsn} | sed s/[a-zA-Z0-9]//g`"
+    if [ "${temp}" ]; then
+      dnsn="FALSE"
+    fi
+    case "${dnsn}" in
+    "1")
+      dns_ch 1
+      ;;
+    "2")
+      dns_ch 2
+      if [ ! "${dns1}" -a ! "${dns1new}" ]; then
+        dns1new="${dns2new}"
+        dns2new=""
+        echo "Name Server 1 is empty, I will use this for Name Server 1"
+        pressenter
+      fi
+      ;;
+    "3")
+      dns_ch 3
+      if [ ! "${dns1}" -a ! "${dns1new}" ]; then
+        dns1new="${dns3new}"
+        dns3new=""
+        echo "Name Server 1 is empty, I will use this for Name Server 1"
+        pressenter
+      elif [ ! "${dns2}" -a ! "${dns2new}" ]; then
+        dns2new="${dns3new}"
+        dns3new=""
+        echo "Name Server 2 is empty, I will use this for Name Server 2"
+        pressenter
+      fi
+      ;;
+    "r")
+      echo -n "reset all dns setting(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        dns1new=$dns1
+        dns2new=$dns2
+        dns3new=$dns3
+        ;;
+      esac
+      ;;
+    esac
+  done
+}
+
+dns_ch() {
+  temp=""
+  while [ ! "${temp}" ]; do
+    echo -n "Input new dns IP: "
+    read temp
+    if [ ! "${temp}" ]; then
+      echo -n "Clear DNS ${1} (y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        eval dns${1}new=""
+        modified="TRUE"
+        break
+        ;;
+      *)
+        eval dns${1}new="\$dns${1}"
+        echo "Canceled."
+        sleep 1
+        break
+        ;;
+      esac
+    fi
+    temp="`ip_chk ${temp}`"
+    if [ ! "${temp}" ]; then
+      echo "Invalid dns IP!"
+    else
+      eval dns${1}new="${temp}"
+      modified="TRUE"
+      dnsnew="MODIFIED"
+    fi
+  done
+}
+
+password_ch() {
+  /usr/bin/passwd sysadmin
+  modified="TRUE"
+  sleep 1
+}
+
+systemutilitymenu() {
+  sysn=""
+  while [ "$sysn" != "x" ]; do
+    clear
+    randomdebugcode "System Utility"
+    echo -n "
+
+
+        		CURRENT		NEW
+      1. password
+      2. shutdown
+      3. reboot
+
+      4. ping
+      5. traceroute
+
+      x. Main menu
+
+         Your select: "
+    read sysn
+    temp="`echo ${sysn} | sed s/[a-zA-Z0-9]//g`"
+    if [ "${temp}" ]; then
+      sysn="FALSE"
+    fi
+    case "${sysn}" in
+    "1")
+      password_ch
+      ;;
+    "2")
+      echo -n "Shutdown the machine now(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        echo "System is halting. . ."
+	/usr/local/etc/rc.d/apache.sh stop > /dev/null
+	/usr/local/etc/rc.d/sendmail.sh stop > /dev/null
+	killall -9 sendmail sendmail.deferred php > /dev/null
+	killall -9 sendmail sendmail.deferred php > /dev/null
+	/usr/local/etc/rc.d/mysql.sh stop > /dev/null
+	sleep 3
+        sync
+        sync
+        sync
+        halt -p
+        ;;
+      esac
+      ;;
+    "3")
+      echo -n "Reboot the machine now(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        echo "Rebooting. . ."
+	/usr/local/etc/rc.d/apache.sh stop > /dev/null
+	/usr/local/etc/rc.d/sendmail.sh stop > /dev/null
+	killall -9 sendmail sendmail.deferred php > /dev/null
+	killall -9 sendmail sendmail.deferred php > /dev/null
+	/usr/local/etc/rc.d/mysql.sh stop > /dev/null
+	sleep 3
+        sync
+        sync
+        sync
+        reboot
+        ;;
+      esac
+      ;;
+    "4")
+      echo -n "Input IP or host to ping: "
+      read temp
+      if [ ! "${temp}" ]; then
+        echo "Canceled."
+        sleep 1
+      else
+        echo "Ping 10 times"
+        /sbin/ping -c 10 -t 10 $temp
+        pressenter
+      fi
+      ;;
+    "5")
+      echo -n "Input IP or host to trace: "
+      read temp
+      if [ ! "${temp}" ]; then
+        echo "Canceled."
+        sleep 1
+      else
+        echo "trace route with max number of hops 10"
+        /usr/sbin/traceroute -m 10 $temp
+        pressenter
+      fi
+      ;;
+    esac
+  done
+}
+
+resetall() {
+  eval ipnew1="192.168.1.250"
+  eval netmasknew1="255.255.128.0"
+  gatewaynew="192.168.1.254"
+  hostnamenew="myhost"
+  domainnamenew="my.domain"
+  dns1new="192.168.1.254"
+  dns2new=""
+  dns3new=""
+  modified="TRUE"
+}
+ 
+saveexit() {
+#gateway
+  selection="x"
+  if [ "${gatewaynew}" != "${gateway}" ]; then
+    echo -n "Default Gateway. . ."
+    cat /etc/rc.conf | sed s/^defaultrouter=".*"/defaultrouter=\"${gatewaynew}\"/ > ${tmpdir}rc.conf.new
+    mv -f ${tmpdir}rc.conf.new /etc/rc.conf
+    restart="TRUE"
+    echo "OK"
+  fi
+#dns
+  if [ "${dns1new}" != "${dns1}" -o "${dns2new}" != "${dns2}" -o "${dns3new}" != "${dns3}" ]; then
+    echo -n "DNS . . ."
+    cat /etc/resolv.conf | grep -v "nameserver" > ${tmpdir}resolv.conf.new
+    if [ "${dns1new}" ]; then
+      echo "nameserver	${dns1new}" >> ${tmpdir}resolv.conf.new
+    fi
+    if [ "${dns2new}" ]; then
+      echo "nameserver	${dns2new}" >> ${tmpdir}resolv.conf.new
+    fi
+    if [ "${dns3new}" ]; then
+      echo "nameserver	${dns3new}" >> ${tmpdir}resolv.conf.new
+    fi
+    mv -f ${tmpdir}resolv.conf.new /etc/resolv.conf
+    restart="TRUE"
+    echo "OK"
+  fi
+#ip/mask
+  i="1"
+  while [ "${i}" -le "${ifnum}" ]; do
+    eval iface="\$nic${i}"
+    eval tempii="ifconfig_${iface}"
+    eval tempnew="\$ipnew${i}"
+    eval temp="\$ip${i}"
+    eval tempnew2="\$netmasknew${i}"
+    eval temp2="\$netmask${i}"
+    if [ "${tempnew}" != "${temp}" -o "${tempnew2}" != "${temp2}" ]; then
+      echo -n "Configuring ${iface} . . ."
+      RSA=`grep -c "ifconfig_${iface}=" /etc/rc.conf`
+      if [ $RSA = 1 ]; then
+        cat /etc/rc.conf | sed 's/ifconfig_'${iface}'="inet[ ].*[ ]netmask[ ].*"/ifconfig_'${iface}'="inet '${tempnew}'  netmask '${tempnew2}'"/' > ${tmpdir}rc.conf.new
+      else
+        grep -v "ifconfig_${iface}=" /etc/rc.conf | sed 's/^defaultrouter=/ifconfig_'${iface}'="inet '${tempnew}'  netmask '${tempnew2}'"\
+defaultrouter=/' > ${tmpdir}rc.conf.new
+      fi
+      if [ -n "${temp}" ]; then
+        cat /etc/hosts | grep -v "${temp}" > ${tmpdir}hosts.new
+      else
+	cp /etc/hosts ${tmpdir}hosts.new
+      fi
+      eval echo "${tempnew}\	\	${hostname} ${hostname}\.${domainname}" >> ${tmpdir}hosts.new
+      if [ "${virtusertableexist}" != "IDONTCARE" ]; then
+        cat /etc/mail/virtusertable | grep -v "${temp}" > ${tmpdir}virtusertable.new
+        echo "@[${tempnew}]	5j4vu6z" >> ${tmpdir}virtusertable.new
+        mv -f ${tmpdir}virtusertable.new /etc/mail/virtusertable
+        makemap hash /etc/mail/virtusertable.db < /etc/mail/virtusertable
+      fi
+      mv -f ${tmpdir}rc.conf.new /etc/rc.conf
+      mv -f ${tmpdir}hosts.new /etc/hosts
+      restart="TRUE"
+      echo "OK"
+    fi
+    i="`expr ${i} + 1`"
+  done
+#hostname
+  if [ "${hostnamenew}" != "${hostname}" ]; then
+    echo -n "hostname . . ."
+    cat /etc/rc.conf | sed s/^hostname=".*"/hostname=\"${hostnamenew}\"/ > ${tmpdir}rc.conf.new
+    cat /etc/hosts | sed "s/${hostname}/${hostnamenew}/g" > ${tmpdir}hosts.new
+    if [ "${virtusertableexist}" != "IDONTCARE" ]; then
+      RSA=`grep -c "${hostname}" /etc/mail/virtusertable`
+      if [ $RSA = 0 ]; then
+        eval echo "@${hostnamenew}\.${domainname}\      \       5j4vu6z" >> /etc/mail/virtusertable
+      else
+        cat /etc/mail/virtusertable | sed "s/${hostname}/${hostnamenew}/g" > ${tmpdir}virtusertable.new
+        mv -f ${tmpdir}virtusertable.new /etc/mail/virtusertable
+      fi
+      makemap hash /etc/mail/virtusertable.db < /etc/mail/virtusertable
+    fi
+    mv -f ${tmpdir}rc.conf.new /etc/rc.conf
+    mv -f ${tmpdir}hosts.new /etc/hosts
+    restart="TRUE"
+    echo "OK"
+  fi
+#domain
+  if [ "${domainnamenew}" != "${domainname}" ]; then
+    echo -n "Domain Name . . ."
+    /home/www/redomain ${domainname} ${domainnamenew} > /dev/null
+    if [ "${virtusertableexist}" != "IDONTCARE" ]; then
+      cat /etc/mail/virtusertable | sed "s/${domainname}/${domainnamenew}/g" > ${tmpdir}virtusertable.new
+      mv -f ${tmpdir}virtusertable.new /etc/mail/virtusertable
+      makemap hash /etc/mail/virtusertable.db < /etc/mail/virtusertable
+    fi
+    restart="TRUE"
+    echo "OK"
+  fi
+#reboot
+  if [ "${restart}" ]; then
+    echo "System is going to reboot."
+    pressenter
+    sync
+    sync
+    sync
+    reboot
+  fi
+}
+
+mainmenu() {
+  while [ "$selection" != "x" ]; do
+    selection=""
+    clear
+    randomdebugcode "  Main menu   "
+
+    echo -n "
+
+        		CURRENT			NEW
+      1. IP/netmask
+      2. default gateway($gateway)		($gatewaynew)
+      3. hostname	($hostname)		($hostnamenew)
+      4. domain name	($domainname)	($domainnamenew)
+      5. DNS
+
+      6. system utility
+
+      r. load factory default
+      s. save & exit
+      x. exit without saving
+
+         Your select: "
+
+    read selection
+    temp="`echo ${selection} | sed s/[a-zA-Z0-9]//g`"
+    if [ "${temp}" ]; then
+      selection="FALSE"
+    fi
+    case "${selection}" in
+    "1")
+      ip_menu
+      ;;
+    "2")
+      gateway_ch
+      ;;
+    "3")
+      hostname_ch
+      ;;
+    "4")
+      domainname_ch
+      ;;
+    "5")
+      dns_menu
+      ;;
+    "6")
+      systemutilitymenu
+      ;;
+    "r")
+      echo "This will reset all network setting to factory default."
+      echo -n "Are you sure(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        resetall
+        ;;
+      esac
+      ;;
+    "s")
+      echo -n "save and exit(y/N)? "
+      read yN
+      case "${yN}" in
+      [Yy])
+        saveexit
+        ;;
+      esac
+      ;;
+    esac
+  done
+  sleep 1
+  clear
+}
+
+temp=`w | awk 'BEGIN { loginn = 0 } { if ( $1 == "sysadmin" ) { loginn ++ } } END { if ( loginn >= 2 ) { print "TRUE" } }'`
+if [ "${temp}" ]; then
+  clear
+  echo "                                                                            FF"
+  echo
+  echo "There is another sysadmin online"
+  echo "No synchronic login for sysadmin is allowed"
+  sleep 5
+else
+  mainmenu
+fi
